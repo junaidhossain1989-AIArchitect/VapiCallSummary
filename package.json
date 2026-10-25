@@ -1,0 +1,29 @@
+{
+  "name": "vapi-call-summary-service",
+  "version": "1.0.0",
+  "description": "Production-ready Node.js service for handling Vapi webhooks and sending email summaries via Brevo",
+  "main": "server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "keywords": [
+    "vapi",
+    "webhook",
+    "brevo",
+    "email",
+    "cloud-run"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "dotenv": "^16.3.1",
+    "cors": "^2.8.5",
+    "axios": "^1.6.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

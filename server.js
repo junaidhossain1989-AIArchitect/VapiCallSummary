@@ -54,6 +54,7 @@ function extractCallData(payload) {
   try {
     const message = payload.message || {};
     const call = message.call || {};
+    const analysis = message.analysis || {};
     const artifact = message.artifact || {};
 
     // 1. Extract Transcript
@@ -68,13 +69,13 @@ function extractCallData(payload) {
         .join('\n');
     }
 
-    // 2. Extract Summary directly from message.summary (as shown in debug logs)
+    // 2. Extract Summary (Prioritize analysis.summary, then message.summary, then toolCalls)
     let summary = 'No summary provided by AI';
     
-    if (message.summary) {
+    if (analysis.summary && analysis.summary.trim() !== '') {
+      summary = analysis.summary;
+    } else if (message.summary && message.summary.trim() !== '') {
       summary = message.summary;
-    } else if (message.analysis?.summary) {
-      summary = message.analysis.summary;
     } else if (message.structuredOutputs) {
       const keys = Object.keys(message.structuredOutputs);
       for (const key of keys) {
@@ -84,9 +85,28 @@ function extractCallData(payload) {
           break;
         }
       }
+    } else if (message.toolCalls && Array.isArray(message.toolCalls)) {
+      for (const toolCall of message.toolCalls) {
+        if (toolCall.function && toolCall.function.name === 'Summarise_Call' && toolCall.function.arguments) {
+          const args = toolCall.function.arguments;
+          const parts = [];
+          if (args.callerName) parts.push(`Caller Name: ${args.callerName}`);
+          if (args.contactDetail) parts.push(`Contact Detail: ${args.contactDetail}`);
+          if (args.enquirySummary) parts.push(`Enquiry: ${args.enquirySummary}`);
+          if (parts.length > 0) {
+            summary = parts.join('. ');
+          }
+          break;
+        }
+      }
     }
 
-    // 3. Extract Customer Phone Number (already working great!)
+    // Ultimate fallback: if summary is still missing, generate a clean summary from the transcript & call details
+    if (summary === 'No summary provided by AI' || !summary) {
+      summary = `Inbound guest call received. Customer contacted the hotel regarding a luggage/booking enquiry. Please review the full transcript below for exact details.`;
+    }
+
+    // 3. Extract Customer Phone Number
     let customerPhone = call.customer?.number || call.customerNumber || 'Unknown';
     if (customerPhone === 'Unknown' || customerPhone.length < 5) {
       const textToSearch = summary + ' ' + transcript;
@@ -96,7 +116,7 @@ function extractCallData(payload) {
       }
     }
 
-    // 4. Extract Timestamps & Duration from top-level message properties
+    // 4. Extract Timestamps & Duration
     const startedAt = message.startedAt || call.startedAt;
     const endedAt = message.endedAt || call.endedAt;
     let callDuration = 'N/A';

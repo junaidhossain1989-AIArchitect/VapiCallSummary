@@ -20,7 +20,7 @@ app.use(express.json({ limit: '1mb' }));
  * @param {Object} req - Express request object
  * @returns {boolean} - True if valid, false otherwise
  */
-function validateWebhook(req) {
+ function validateWebhook(req) {
   const webhookSecret = process.env.VAPI_WEBHOOK_SECRET;
   
   // If no secret is configured, skip validation (for development/testing)
@@ -43,7 +43,7 @@ function validateWebhook(req) {
     : providedSecret;
 
   return token === webhookSecret;
-}
+ }
 
 /**
  * Extracts call data from Vapi webhook payload
@@ -56,39 +56,32 @@ function extractCallData(payload) {
     const call = message.call || {};
     const analysis = message.analysis || {};
     const artifact = message.artifact || {};
-    const structuredOutputs = message.structuredOutputs || {};
 
-    // Extract customer phone number
-    let customerPhone = call.customer?.number || 'Unknown';
+    // 1. Extract Customer Phone Number
+    let customerPhone = call.customer?.number || call.customerNumber || 'Unknown';
     
-    // Try to extract phone from structuredOutputs summary
-    if (customerPhone === 'Unknown' && structuredOutputs) {
-      const outputKeys = Object.keys(structuredOutputs);
-      for (const key of outputKeys) {
-        if (structuredOutputs[key] && structuredOutputs[key].result) {
-          const phoneMatch = structuredOutputs[key].result.match(/(\+?\d{6,15})/);
-          if (phoneMatch) {
-            customerPhone = phoneMatch[0];
-            break;
-          }
-        }
-      }
+    // If unknown, check metadata or transcript regex
+    let transcript = 'Transcript not available';
+    if (artifact.transcript) {
+      transcript = artifact.transcript;
+    } else if (message.transcript) {
+      transcript = message.transcript;
+    } else if (message.messages && Array.isArray(message.messages)) {
+      transcript = message.messages
+        .map(msg => `${msg.role || 'unknown'}: ${msg.message || ''}`)
+        .join('\n');
     }
-    
-    // Try to extract phone from toolCalls if still not found
-    if (customerPhone === 'Unknown' && message.toolCalls && Array.isArray(message.toolCalls)) {
-      for (const toolCall of message.toolCalls) {
-        if (toolCall.function && toolCall.function.name === 'Summarize_Call' && toolCall.function.arguments) {
-          const args = toolCall.function.arguments;
-          if (args.contactDetail) {
-            customerPhone = args.contactDetail;
-            break;
-          }
-        }
+
+    if (customerPhone === 'Unknown' && transcript !== 'Transcript not available') {
+      const phoneRegex = /(\+?\d{8,15})/g;
+      const phoneMatches = transcript.match(phoneRegex);
+      if (phoneMatches && phoneMatches.length > 0) {
+        // Look for the one mentioned in the text (like 987654321)
+        customerPhone = phoneMatches[0];
       }
     }
 
-    // Extract call timestamps and calculate duration
+    // 2. Extract Timestamps & Duration
     const startedAt = call.startedAt;
     const endedAt = call.endedAt;
     let callDuration = 'N/A';
@@ -107,80 +100,25 @@ function extractCallData(payload) {
       timestamp = new Date(startedAt).toISOString();
     }
 
-    // Extract AI summary - try multiple locations based on Vapi payload structure
+    // 3. Extract AI Summary (Prioritize standard Vapi analysis.summary)
     let summary = 'No summary provided by AI';
-    
-    // Debug logging
-    console.log('DEBUG: structuredOutputs exists:', !!structuredOutputs);
-    console.log('DEBUG: structuredOutputs keys:', structuredOutputs ? Object.keys(structuredOutputs) : 'none');
-    console.log('DEBUG: toolCalls exists:', !!message.toolCalls);
-    
-    // Try structuredOutputs FIRST (has the complete summary)
-    if (structuredOutputs) {
-      const outputKeys = Object.keys(structuredOutputs);
-      console.log('DEBUG: Checking structuredOutputs with keys:', outputKeys);
-      for (const key of outputKeys) {
-        console.log(`DEBUG: Checking key ${key}:`, structuredOutputs[key]);
-        if (structuredOutputs[key] && structuredOutputs[key].result) {
-          summary = structuredOutputs[key].result;
-          console.log('DEBUG: Found summary in structuredOutputs:', summary.substring(0, 100));
-          break;
-        }
-      }
-    }
-    
-    // Fallback to toolCalls array (Vapi function calls with summary data)
-    if (summary === 'No summary provided by AI' && message.toolCalls && Array.isArray(message.toolCalls)) {
-      console.log('DEBUG: Checking toolCalls...');
-      for (const toolCall of message.toolCalls) {
-        if (toolCall.function && toolCall.function.name === 'Summarize_Call' && toolCall.function.arguments) {
-          const args = toolCall.function.arguments;
-          // Build summary from function arguments
-          const parts = [];
-          if (args.callerName) parts.push(`Caller: ${args.callerName}`);
-          if (args.contactDetail) parts.push(`Contact: ${args.contactDetail}`);
-          if (args.enquirySummary) parts.push(`Enquiry: ${args.enquirySummary}`);
-          if (parts.length > 0) {
-            summary = parts.join('. ');
-            console.log('DEBUG: Found summary in toolCalls:', summary);
-          }
-          break;
-        }
-      }
-    }
-    
-    // Fallback to analysis.summary (older format)
-    if (summary === 'No summary provided by AI' && analysis.summary) {
+
+    if (analysis.summary) {
       summary = analysis.summary;
-      console.log('DEBUG: Found summary in analysis.summary');
-    }
-    
-    console.log('DEBUG: Final summary:', summary.substring(0, 100));
-
-    // Extract full transcript - try multiple locations
-    let transcript = 'Transcript not available';
-    
-    // Try artifact.transcript first
-    if (artifact.transcript) {
-      transcript = artifact.transcript;
-    }
-    // Fallback to message.transcript
-    else if (message.transcript) {
-      transcript = message.transcript;
-    }
-    // Fallback to messages array
-    else if (message.messages && Array.isArray(message.messages)) {
-      transcript = message.messages
-        .map(msg => `${msg.role || 'unknown'}: ${msg.message || ''}`)
-        .join('\n');
+    } else if (analysis.structuredData) {
+      summary = JSON.stringify(analysis.structuredData, null, 2);
+    } else if (message.summary) {
+      summary = message.summary;
     }
 
-    // If phone is still unknown, try to extract from transcript using regex
-    if (customerPhone === 'Unknown' && transcript !== 'Transcript not available') {
-      const phoneRegex = /(\+?\d{10,15})/g;
-      const phoneMatches = transcript.match(phoneRegex);
-      if (phoneMatches && phoneMatches.length > 0) {
-        customerPhone = phoneMatches[0];
+    // If Vapi summary is still empty, let's use the analysis evaluation or structured output if available
+    if (summary === 'No summary provided by AI' && message.structuredOutputs) {
+      const outputKeys = Object.keys(message.structuredOutputs);
+      for (const key of outputKeys) {
+        if (message.structuredOutputs[key]?.result) {
+          summary = message.structuredOutputs[key].result;
+          break;
+        }
       }
     }
 

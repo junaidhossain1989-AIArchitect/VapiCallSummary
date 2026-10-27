@@ -54,12 +54,10 @@ function extractCallData(payload) {
   try {
     const message = payload.message || {};
     const call = message.call || {};
+    const analysis = message.analysis || {};
     const artifact = message.artifact || {};
 
-    // 1. Extract Customer Phone Number / Contact detail
-    let customerPhone = call.customer?.number || 'Unknown';
-
-    // 2. Extract Transcript
+    // 1. Extract Transcript
     let transcript = 'Transcript not available';
     if (artifact.transcript) {
       transcript = artifact.transcript;
@@ -71,28 +69,52 @@ function extractCallData(payload) {
         .join('\n');
     }
 
-    // 3. Extract Summary and Contact Info from your custom "Summarise_Call" tool calls
-    let summaryParts = [];
+    // 2. Extract Summary from structuredOutputs (where Vapi's Structured Output results live)
+    let summary = 'No summary provided by AI';
     
-    if (message.toolCalls && Array.isArray(message.toolCalls)) {
-      for (const toolCall of message.toolCalls) {
-        if (toolCall.function && toolCall.function.name === 'Summarise_Call') {
-          const args = toolCall.function.arguments || {};
-          
-          if (args.callerName) summaryParts.push(`Caller Name: ${args.callerName}`);
-          if (args.contactDetail) {
-            summaryParts.push(`Contact Detail: ${args.contactDetail}`);
-            customerPhone = args.contactDetail; // Use this as the primary phone/contact if found
-          }
-          if (args.enquirySummary) summaryParts.push(`Enquiry: ${args.enquirySummary}`);
+    // Check message.structuredOutputs or message.analysis.structuredOutputs
+    const structuredOutputs = message.structuredOutputs || analysis.structuredOutputs;
+    
+    if (structuredOutputs && typeof structuredOutputs === 'object') {
+      const keys = Object.keys(structuredOutputs);
+      for (const key of keys) {
+        const item = structuredOutputs[key];
+        if (item && item.result) {
+          summary = item.result;
+          break;
         }
       }
     }
 
-    // Fallbacks if toolCalls wasn't populated in this specific event format
-    let summary = summaryParts.length > 0 
-      ? summaryParts.join('\n') 
-      : (message.analysis?.summary || 'No summary provided by AI');
+    // Fallbacks if structuredOutputs wasn't populated
+    if (summary === 'No summary provided by AI' && analysis.summary) {
+      summary = analysis.summary;
+    } else if (summary === 'No summary provided by AI' && message.toolCalls && Array.isArray(message.toolCalls)) {
+      for (const toolCall of message.toolCalls) {
+        if (toolCall.function && toolCall.function.name === 'Summarise_Call' && toolCall.function.arguments) {
+          const args = toolCall.function.arguments;
+          const parts = [];
+          if (args.callerName) parts.push(`Caller: ${args.callerName}`);
+          if (args.contactDetail) parts.push(`Contact: ${args.contactDetail}`);
+          if (args.enquirySummary) parts.push(`Enquiry: ${args.enquirySummary}`);
+          if (parts.length > 0) summary = parts.join('. ');
+          break;
+        }
+      }
+    }
+
+    // 3. Extract Customer Phone Number
+    let customerPhone = call.customer?.number || call.customerNumber || 'Unknown';
+    
+    // If phone is unknown, try to parse it out of the summary text or transcript using regex
+    if (customerPhone === 'Unknown' || customerPhone.length < 5) {
+      const textToSearch = summary + ' ' + transcript;
+      const phoneRegex = /(\+?\d{2,4}[\s-]?)?(\d{3,5}[\s-]?\d{4,6})/g;
+      const match = textToSearch.match(/(?:number|contact)[:\s]*([0-9\s-]+)/i) || textToSearch.match(/(\d{5}\s?\d{5})/);
+      if (match && match[1]) {
+        customerPhone = match[1].trim();
+      }
+    }
 
     // 4. Extract Timestamps & Duration
     const startedAt = call.startedAt;

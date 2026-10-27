@@ -54,13 +54,12 @@ function extractCallData(payload) {
   try {
     const message = payload.message || {};
     const call = message.call || {};
-    const analysis = message.analysis || {};
     const artifact = message.artifact || {};
 
-    // 1. Extract Customer Phone Number
-    let customerPhone = call.customer?.number || call.customerNumber || 'Unknown';
-    
-    // If unknown, check metadata or transcript regex
+    // 1. Extract Customer Phone Number / Contact detail
+    let customerPhone = call.customer?.number || 'Unknown';
+
+    // 2. Extract Transcript
     let transcript = 'Transcript not available';
     if (artifact.transcript) {
       transcript = artifact.transcript;
@@ -72,16 +71,30 @@ function extractCallData(payload) {
         .join('\n');
     }
 
-    if (customerPhone === 'Unknown' && transcript !== 'Transcript not available') {
-      const phoneRegex = /(\+?\d{8,15})/g;
-      const phoneMatches = transcript.match(phoneRegex);
-      if (phoneMatches && phoneMatches.length > 0) {
-        // Look for the one mentioned in the text (like 987654321)
-        customerPhone = phoneMatches[0];
+    // 3. Extract Summary and Contact Info from your custom "Summarise_Call" tool calls
+    let summaryParts = [];
+    
+    if (message.toolCalls && Array.isArray(message.toolCalls)) {
+      for (const toolCall of message.toolCalls) {
+        if (toolCall.function && toolCall.function.name === 'Summarise_Call') {
+          const args = toolCall.function.arguments || {};
+          
+          if (args.callerName) summaryParts.push(`Caller Name: ${args.callerName}`);
+          if (args.contactDetail) {
+            summaryParts.push(`Contact Detail: ${args.contactDetail}`);
+            customerPhone = args.contactDetail; // Use this as the primary phone/contact if found
+          }
+          if (args.enquirySummary) summaryParts.push(`Enquiry: ${args.enquirySummary}`);
+        }
       }
     }
 
-    // 2. Extract Timestamps & Duration
+    // Fallbacks if toolCalls wasn't populated in this specific event format
+    let summary = summaryParts.length > 0 
+      ? summaryParts.join('\n') 
+      : (message.analysis?.summary || 'No summary provided by AI');
+
+    // 4. Extract Timestamps & Duration
     const startedAt = call.startedAt;
     const endedAt = call.endedAt;
     let callDuration = 'N/A';
@@ -100,28 +113,6 @@ function extractCallData(payload) {
       timestamp = new Date(startedAt).toISOString();
     }
 
-    // 3. Extract AI Summary (Prioritize standard Vapi analysis.summary)
-    let summary = 'No summary provided by AI';
-
-    if (analysis.summary) {
-      summary = analysis.summary;
-    } else if (analysis.structuredData) {
-      summary = JSON.stringify(analysis.structuredData, null, 2);
-    } else if (message.summary) {
-      summary = message.summary;
-    }
-
-    // If Vapi summary is still empty, let's use the analysis evaluation or structured output if available
-    if (summary === 'No summary provided by AI' && message.structuredOutputs) {
-      const outputKeys = Object.keys(message.structuredOutputs);
-      for (const key of outputKeys) {
-        if (message.structuredOutputs[key]?.result) {
-          summary = message.structuredOutputs[key].result;
-          break;
-        }
-      }
-    }
-
     return {
       customerPhone,
       callDuration,
@@ -134,7 +125,6 @@ function extractCallData(payload) {
     throw new Error('Failed to extract call data from webhook payload');
   }
 }
-
 /**
  * Health check endpoint for Cloud Run
  */

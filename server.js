@@ -54,15 +54,7 @@ function extractCallData(payload) {
   try {
     const message = payload.message || {};
     const call = message.call || {};
-    const analysis = message.analysis || {};
     const artifact = message.artifact || {};
-
-    // --- DEBUG LOGS TO INSPECT PAYLOAD STRUCTURE ---
-    console.log('--- RAW PAYLOAD STRUCTURE DEBUG ---');
-    console.log('message keys:', Object.keys(message));
-    console.log('analysis keys:', Object.keys(analysis));
-    console.log('structuredOutputs:', JSON.stringify(message.structuredOutputs || analysis.structuredOutputs || {}, null, 2));
-    console.log('-----------------------------------');
 
     // 1. Extract Transcript
     let transcript = 'Transcript not available';
@@ -76,49 +68,25 @@ function extractCallData(payload) {
         .join('\n');
     }
 
-    // 2. Extract Summary
+    // 2. Extract Summary directly from message.summary (as shown in debug logs)
     let summary = 'No summary provided by AI';
     
-    const structuredOutputs = message.structuredOutputs || analysis.structuredOutputs;
-    if (structuredOutputs) {
-      // If it's an object with dynamic keys or standard keys
-      const keys = Object.keys(structuredOutputs);
+    if (message.summary) {
+      summary = message.summary;
+    } else if (message.analysis?.summary) {
+      summary = message.analysis.summary;
+    } else if (message.structuredOutputs) {
+      const keys = Object.keys(message.structuredOutputs);
       for (const key of keys) {
-        const val = structuredOutputs[key];
-        if (typeof val === 'string') {
-          summary = val;
-          break;
-        } else if (val && val.result) {
+        const val = message.structuredOutputs[key];
+        if (val && val.result) {
           summary = val.result;
           break;
-        } else if (val && typeof val === 'object') {
-          // Check if there's a nested result or text value
-          summary = JSON.stringify(val);
-          break;
         }
       }
     }
 
-    // Fallbacks
-    if (summary === 'No summary provided by AI' && analysis.summary) {
-      summary = analysis.summary;
-    } else if (summary === 'No summary provided by AI' && message.toolCalls && Array.isArray(message.toolCalls)) {
-      for (const toolCall of message.toolCalls) {
-        if (toolCall.function && toolCall.function.name === 'Summarise_Call' && toolCall.function.arguments) {
-          const args = toolCall.function.arguments;
-          const parts = [];
-          if (args.callerName) parts.push(`Caller: ${args.callerName}`);
-          if (args.contactDetail) parts.push(`Contact: ${args.contactDetail}`);
-          if (args.enquirySummary) parts.push(`Enquiry: ${args.enquirySummary}`);
-          if (parts.length > 0) {
-            summary = parts.join('. ');
-          }
-          break;
-        }
-      }
-    }
-
-    // 3. Extract Customer Phone Number
+    // 3. Extract Customer Phone Number (already working great!)
     let customerPhone = call.customer?.number || call.customerNumber || 'Unknown';
     if (customerPhone === 'Unknown' || customerPhone.length < 5) {
       const textToSearch = summary + ' ' + transcript;
@@ -128,13 +96,17 @@ function extractCallData(payload) {
       }
     }
 
-    // 4. Extract Timestamps & Duration
-    const startedAt = call.startedAt;
-    const endedAt = call.endedAt;
+    // 4. Extract Timestamps & Duration from top-level message properties
+    const startedAt = message.startedAt || call.startedAt;
+    const endedAt = message.endedAt || call.endedAt;
     let callDuration = 'N/A';
     let timestamp = 'N/A';
 
-    if (startedAt && endedAt) {
+    if (message.durationSeconds) {
+      const mins = Math.floor(message.durationSeconds / 60);
+      const secs = message.durationSeconds % 60;
+      callDuration = `${mins}m ${secs}s`;
+    } else if (startedAt && endedAt) {
       const startDate = new Date(startedAt);
       const endDate = new Date(endedAt);
       const durationMs = endDate - startDate;
@@ -142,7 +114,10 @@ function extractCallData(payload) {
       const minutes = Math.floor(durationSeconds / 60);
       const seconds = durationSeconds % 60;
       callDuration = `${minutes}m ${seconds}s`;
-      timestamp = startDate.toISOString();
+    }
+
+    if (message.timestamp) {
+      timestamp = new Date(message.timestamp).toISOString();
     } else if (startedAt) {
       timestamp = new Date(startedAt).toISOString();
     }

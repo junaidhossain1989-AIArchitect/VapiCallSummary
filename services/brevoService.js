@@ -73,16 +73,14 @@ export async function sendEmail(emailData) {
     return response.data;
   } catch (error) {
     // Handle different types of errors
+    // TEMPORARY LOG FOR DEBUGGING
+    console.error('RAW BREVO ERROR:', error.response?.data || error.message);
     if (error.response) {
-      // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
       const errorMessage = error.response.data?.message || error.response.statusText;
       throw new Error(`Brevo API error (${error.response.status}): ${errorMessage}`);
     } else if (error.request) {
-      // The request was made but no response was received
       throw new Error('No response received from Brevo API. Request timed out or network error.');
     } else {
-      // Something happened in setting up the request that triggered an Error
       throw new Error(`Error sending email via Brevo: ${error.message}`);
     }
   }

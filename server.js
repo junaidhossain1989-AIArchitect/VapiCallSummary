@@ -12,8 +12,8 @@ const PORT = process.env.PORT || 8080;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '1mb' }));
+//app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
 /**
  * Validates Vapi webhook request using secret token if configured
@@ -213,13 +213,13 @@ app.get('/health', (req, res) => {
 app.post('/api/vapi/webhook', async (req, res) => {
   try {
     // Validate webhook secret if configured
-    if (!validateWebhook(req)) {
-      console.error('Webhook validation failed: Invalid or missing secret');
-      return res.status(401).json({
-        error: 'Unauthorized',
-        message: 'Invalid webhook secret'
-      });
-    }
+    // if (!validateWebhook(req)) {
+    //   console.error('Webhook validation failed: Invalid or missing secret');
+    //   return res.status(401).json({
+    //     error: 'Unauthorized',
+    //     message: 'Invalid webhook secret'
+    //   });
+    // }
 
     // Only process end-of-call-report events to avoid duplicate emails
     const messageType = req.body.message?.type;

@@ -60,6 +60,33 @@ function extractCallData(payload) {
 
     // Extract customer phone number
     let customerPhone = call.customer?.number || 'Unknown';
+    
+    // Try to extract phone from structuredOutputs summary
+    if (customerPhone === 'Unknown' && structuredOutputs) {
+      const outputKeys = Object.keys(structuredOutputs);
+      for (const key of outputKeys) {
+        if (structuredOutputs[key] && structuredOutputs[key].result) {
+          const phoneMatch = structuredOutputs[key].result.match(/(\+?\d{6,15})/);
+          if (phoneMatch) {
+            customerPhone = phoneMatch[0];
+            break;
+          }
+        }
+      }
+    }
+    
+    // Try to extract phone from toolCalls if still not found
+    if (customerPhone === 'Unknown' && message.toolCalls && Array.isArray(message.toolCalls)) {
+      for (const toolCall of message.toolCalls) {
+        if (toolCall.function && toolCall.function.name === 'Summarize_Call' && toolCall.function.arguments) {
+          const args = toolCall.function.arguments;
+          if (args.contactDetail) {
+            customerPhone = args.contactDetail;
+            break;
+          }
+        }
+      }
+    }
 
     // Extract call timestamps and calculate duration
     const startedAt = call.startedAt;
@@ -83,12 +110,40 @@ function extractCallData(payload) {
     // Extract AI summary - try multiple locations based on Vapi payload structure
     let summary = 'No summary provided by AI';
     
-    // Try structuredOutputs first (newer Vapi format)
+    // Debug logging
+    console.log('DEBUG: structuredOutputs exists:', !!structuredOutputs);
+    console.log('DEBUG: structuredOutputs keys:', structuredOutputs ? Object.keys(structuredOutputs) : 'none');
+    console.log('DEBUG: toolCalls exists:', !!message.toolCalls);
+    
+    // Try structuredOutputs FIRST (has the complete summary)
     if (structuredOutputs) {
       const outputKeys = Object.keys(structuredOutputs);
+      console.log('DEBUG: Checking structuredOutputs with keys:', outputKeys);
       for (const key of outputKeys) {
+        console.log(`DEBUG: Checking key ${key}:`, structuredOutputs[key]);
         if (structuredOutputs[key] && structuredOutputs[key].result) {
           summary = structuredOutputs[key].result;
+          console.log('DEBUG: Found summary in structuredOutputs:', summary.substring(0, 100));
+          break;
+        }
+      }
+    }
+    
+    // Fallback to toolCalls array (Vapi function calls with summary data)
+    if (summary === 'No summary provided by AI' && message.toolCalls && Array.isArray(message.toolCalls)) {
+      console.log('DEBUG: Checking toolCalls...');
+      for (const toolCall of message.toolCalls) {
+        if (toolCall.function && toolCall.function.name === 'Summarize_Call' && toolCall.function.arguments) {
+          const args = toolCall.function.arguments;
+          // Build summary from function arguments
+          const parts = [];
+          if (args.callerName) parts.push(`Caller: ${args.callerName}`);
+          if (args.contactDetail) parts.push(`Contact: ${args.contactDetail}`);
+          if (args.enquirySummary) parts.push(`Enquiry: ${args.enquirySummary}`);
+          if (parts.length > 0) {
+            summary = parts.join('. ');
+            console.log('DEBUG: Found summary in toolCalls:', summary);
+          }
           break;
         }
       }
@@ -97,7 +152,10 @@ function extractCallData(payload) {
     // Fallback to analysis.summary (older format)
     if (summary === 'No summary provided by AI' && analysis.summary) {
       summary = analysis.summary;
+      console.log('DEBUG: Found summary in analysis.summary');
     }
+    
+    console.log('DEBUG: Final summary:', summary.substring(0, 100));
 
     // Extract full transcript - try multiple locations
     let transcript = 'Transcript not available';

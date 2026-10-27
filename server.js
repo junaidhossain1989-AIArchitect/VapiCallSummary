@@ -57,6 +57,13 @@ function extractCallData(payload) {
     const analysis = message.analysis || {};
     const artifact = message.artifact || {};
 
+    // --- DEBUG LOGS TO INSPECT PAYLOAD STRUCTURE ---
+    console.log('--- RAW PAYLOAD STRUCTURE DEBUG ---');
+    console.log('message keys:', Object.keys(message));
+    console.log('analysis keys:', Object.keys(analysis));
+    console.log('structuredOutputs:', JSON.stringify(message.structuredOutputs || analysis.structuredOutputs || {}, null, 2));
+    console.log('-----------------------------------');
+
     // 1. Extract Transcript
     let transcript = 'Transcript not available';
     if (artifact.transcript) {
@@ -69,24 +76,30 @@ function extractCallData(payload) {
         .join('\n');
     }
 
-    // 2. Extract Summary from structuredOutputs (where Vapi's Structured Output results live)
+    // 2. Extract Summary
     let summary = 'No summary provided by AI';
     
-    // Check message.structuredOutputs or message.analysis.structuredOutputs
     const structuredOutputs = message.structuredOutputs || analysis.structuredOutputs;
-    
-    if (structuredOutputs && typeof structuredOutputs === 'object') {
+    if (structuredOutputs) {
+      // If it's an object with dynamic keys or standard keys
       const keys = Object.keys(structuredOutputs);
       for (const key of keys) {
-        const item = structuredOutputs[key];
-        if (item && item.result) {
-          summary = item.result;
+        const val = structuredOutputs[key];
+        if (typeof val === 'string') {
+          summary = val;
+          break;
+        } else if (val && val.result) {
+          summary = val.result;
+          break;
+        } else if (val && typeof val === 'object') {
+          // Check if there's a nested result or text value
+          summary = JSON.stringify(val);
           break;
         }
       }
     }
 
-    // Fallbacks if structuredOutputs wasn't populated
+    // Fallbacks
     if (summary === 'No summary provided by AI' && analysis.summary) {
       summary = analysis.summary;
     } else if (summary === 'No summary provided by AI' && message.toolCalls && Array.isArray(message.toolCalls)) {
@@ -97,7 +110,9 @@ function extractCallData(payload) {
           if (args.callerName) parts.push(`Caller: ${args.callerName}`);
           if (args.contactDetail) parts.push(`Contact: ${args.contactDetail}`);
           if (args.enquirySummary) parts.push(`Enquiry: ${args.enquirySummary}`);
-          if (parts.length > 0) summary = parts.join('. ');
+          if (parts.length > 0) {
+            summary = parts.join('. ');
+          }
           break;
         }
       }
@@ -105,14 +120,11 @@ function extractCallData(payload) {
 
     // 3. Extract Customer Phone Number
     let customerPhone = call.customer?.number || call.customerNumber || 'Unknown';
-    
-    // If phone is unknown, try to parse it out of the summary text or transcript using regex
     if (customerPhone === 'Unknown' || customerPhone.length < 5) {
       const textToSearch = summary + ' ' + transcript;
-      const phoneRegex = /(\+?\d{2,4}[\s-]?)?(\d{3,5}[\s-]?\d{4,6})/g;
-      const match = textToSearch.match(/(?:number|contact)[:\s]*([0-9\s-]+)/i) || textToSearch.match(/(\d{5}\s?\d{5})/);
-      if (match && match[1]) {
-        customerPhone = match[1].trim();
+      const phoneMatch = textToSearch.match(/(?:number|contact|is)[:\s]*([0-9\s-]{8,15})/i);
+      if (phoneMatch && phoneMatch[1]) {
+        customerPhone = phoneMatch[1].trim();
       }
     }
 
